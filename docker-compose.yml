@@ -1,61 +1,95 @@
+# SwiftDrop - runs the whole system on one laptop.
+# Values like ${POSTGRES_DB} come from the .env file in this folder.
+#
+# Daily development (only the infrastructure in Docker):
+#   docker compose up -d postgres rabbitmq mailpit adminer
+# Full system (everything in Docker, e.g. for the demo):
+#   docker compose up -d --build
+
 services:
+  # ---------- PostgreSQL database ----------
   postgres:
     image: postgres:17
     container_name: swiftdrop-postgres
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
-      - "5432:5432"
+      - "5432:5432"            # your laptop:container
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql/data   # data survives restarts
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 10
 
+  # ---------- RabbitMQ message broker ----------
   rabbitmq:
-    image: rabbitmq:management
+    image: rabbitmq:4-management
     container_name: swiftdrop-rabbitmq
+    restart: unless-stopped
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
     ports:
-      - "5672:5672"     # used by the backend
-      - "15672:15672"   # RabbitMQ web dashboard
+      - "5672:5672"            # used by the backend
+      - "15672:15672"          # web dashboard: http://localhost:15672
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s
       timeout: 5s
       retries: 10
 
+  # ---------- Fake email inbox (notifications) ----------
   mailpit:
     image: axllent/mailpit
     container_name: swiftdrop-mailpit
+    restart: unless-stopped
     ports:
-      - "8025:8025"     # fake inbox in the browser
-      - "1025:1025"     # SMTP port the backend sends emails to
+      - "8025:8025"            # inbox in the browser: http://localhost:8025
+      - "1025:1025"            # SMTP port the backend sends to
 
+  # ---------- Database viewer in the browser ----------
+  adminer:
+    image: adminer
+    container_name: swiftdrop-adminer
+    restart: unless-stopped
+    ports:
+      - "8081:8080"            # http://localhost:8081
+    depends_on:
+      - postgres
+
+  # ---------- Spring Boot backend ----------
   backend:
     build: ../swiftdrop-backend
     container_name: swiftdrop-backend
+    restart: unless-stopped
     environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
-      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
-      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
-      SPRING_RABBITMQ_HOST: rabbitmq
-      SPRING_RABBITMQ_USERNAME: ${RABBITMQ_USER}
-      SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
-      SPRING_MAIL_HOST: mailpit
-      SPRING_MAIL_PORT: 1025
+      DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      MAIL_HOST: mailpit
+      MAIL_PORT: 1025
       JWT_SECRET: ${JWT_SECRET}
-      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
-      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      JWT_EXPIRY_MINUTES: ${JWT_EXPIRY_MINUTES:-60}
+      JWT_REMEMBER_ME_DAYS: ${JWT_REMEMBER_ME_DAYS:-7}
       FRONTEND_URL: ${FRONTEND_URL}
+      COOKIE_SECURE: "false"
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      SEED_DEMO_USERS: ${SEED_DEMO_USERS:-false}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
     ports:
-      - "8080:8080"
+      - "8080:8080"            # API: http://localhost:8080/api/v1
     depends_on:
       postgres:
         condition: service_healthy
@@ -64,14 +98,18 @@ services:
       mailpit:
         condition: service_started
 
+  # ---------- Next.js frontend ----------
   frontend:
     build:
       context: ../swiftdrop-frontend
       args:
+        # NEXT_PUBLIC_* values are baked in at build time
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+        NEXT_PUBLIC_GOOGLE_LOGIN_ENABLED: ${NEXT_PUBLIC_GOOGLE_LOGIN_ENABLED:-false}
     container_name: swiftdrop-frontend
+    restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "3000:3000"            # http://localhost:3000
     depends_on:
       - backend
 
