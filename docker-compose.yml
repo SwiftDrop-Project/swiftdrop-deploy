@@ -1,31 +1,14 @@
-# SwiftDrop - runs the whole system on one laptop.
-# Values like ${POSTGRES_DB} come from the .env file in this folder.
+# SwiftDrop - default (shared) setup.
+# RabbitMQ, the backend and the frontend run in Docker. The backend uses the team's shared
+# Neon database and sends real email through Gmail. Every value comes from the .env file in
+# this folder (copy .env.example to .env and fill it in).
 #
-# Daily development (only the infrastructure in Docker):
-#   docker compose up -d postgres rabbitmq mailpit adminer
-# Full system (everything in Docker, e.g. for the demo):
 #   docker compose up -d --build
+#
+# To use a local PostgreSQL database and the Mailpit fake inbox instead, add the override file:
+#   docker compose -f docker-compose.yml -f docker-compose.local-db.yml up -d --build
 
 services:
-  # ---------- PostgreSQL database ----------
-  postgres:
-    image: postgres:17
-    container_name: swiftdrop-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    ports:
-      - "5432:5432"            # your laptop:container
-    volumes:
-      - pgdata:/var/lib/postgresql/data   # data survives restarts
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
   # ---------- RabbitMQ message broker ----------
   rabbitmq:
     image: rabbitmq:4-management
@@ -43,60 +26,49 @@ services:
       timeout: 5s
       retries: 10
 
-  # ---------- Fake email inbox (notifications) ----------
-  mailpit:
-    image: axllent/mailpit
-    container_name: swiftdrop-mailpit
-    restart: unless-stopped
-    ports:
-      - "8025:8025"            # inbox in the browser: http://localhost:8025
-      - "1025:1025"            # SMTP port the backend sends to
-
-  # ---------- Database viewer in the browser ----------
-  adminer:
-    image: adminer
-    container_name: swiftdrop-adminer
-    restart: unless-stopped
-    ports:
-      - "8081:8080"            # http://localhost:8081
-    depends_on:
-      - postgres
-
   # ---------- Spring Boot backend ----------
   backend:
     build: ../swiftdrop-backend
     container_name: swiftdrop-backend
     restart: unless-stopped
     environment:
-      DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
-      DB_USER: ${POSTGRES_USER}
-      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      # Database (shared Neon database by default)
+      DB_URL: ${DB_URL:?DB_URL is not set. Put the Neon JDBC URL in .env (see README, Shared setup).}
+      DB_USER: ${DB_USER:?DB_USER is not set. Put the Neon role name in .env (see README, Shared setup).}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is not set. Put the Neon password in .env (see README, Shared setup).}
+      # RabbitMQ (runs in this compose project)
       RABBITMQ_HOST: rabbitmq
-      RABBITMQ_PORT: 5672
+      RABBITMQ_PORT: ${RABBITMQ_PORT:-5672}
       RABBITMQ_USER: ${RABBITMQ_USER}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
-      MAIL_HOST: mailpit
-      MAIL_PORT: 1025
-      JWT_SECRET: ${JWT_SECRET}
+      # Email (Gmail SMTP by default)
+      MAIL_HOST: ${MAIL_HOST}
+      MAIL_PORT: ${MAIL_PORT}
+      MAIL_USERNAME: ${MAIL_USERNAME}
+      MAIL_PASSWORD: ${MAIL_PASSWORD}
+      MAIL_SMTP_AUTH: ${MAIL_SMTP_AUTH}
+      MAIL_STARTTLS: ${MAIL_STARTTLS}
+      MAIL_FROM: ${MAIL_FROM}
+      # Security
+      VERIFICATION_CODE_SECRET: ${VERIFICATION_CODE_SECRET:-}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is not set. Generate one with at least 32 characters (see README, Environment setup).}
       JWT_EXPIRY_MINUTES: ${JWT_EXPIRY_MINUTES:-60}
       JWT_REMEMBER_ME_DAYS: ${JWT_REMEMBER_ME_DAYS:-7}
       FRONTEND_URL: ${FRONTEND_URL}
-      COOKIE_SECURE: "false"
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      # Seed accounts
       ADMIN_EMAIL: ${ADMIN_EMAIL}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       SEED_DEMO_USERS: ${SEED_DEMO_USERS:-false}
       DEMO_PASSWORD: ${DEMO_PASSWORD:-}
+      # Google login (optional)
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
     ports:
       - "8080:8080"            # API: http://localhost:8080/api/v1
     depends_on:
-      postgres:
-        condition: service_healthy
       rabbitmq:
         condition: service_healthy
-      mailpit:
-        condition: service_started
 
   # ---------- Next.js frontend ----------
   frontend:
@@ -112,6 +84,3 @@ services:
       - "3000:3000"            # http://localhost:3000
     depends_on:
       - backend
-
-volumes:
-  pgdata:

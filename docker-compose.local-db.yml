@@ -1,0 +1,67 @@
+# SwiftDrop - optional local database and fake inbox.
+# Adds PostgreSQL, Mailpit and Adminer, and points the backend at them instead of Neon and Gmail.
+# Use it together with docker-compose.yml:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.local-db.yml up -d --build
+#
+# Needs POSTGRES_DB, POSTGRES_USER and POSTGRES_PASSWORD in .env
+# (section "local database option only" in .env.example).
+
+services:
+  # ---------- PostgreSQL database ----------
+  postgres:
+    image: postgres:17
+    container_name: swiftdrop-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5432:5432"            # your laptop:container
+    volumes:
+      - pgdata:/var/lib/postgresql/data   # data survives restarts
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ---------- Fake email inbox ----------
+  mailpit:
+    image: axllent/mailpit
+    container_name: swiftdrop-mailpit
+    restart: unless-stopped
+    ports:
+      - "8025:8025"            # inbox in the browser: http://localhost:8025
+      - "1025:1025"            # SMTP port the backend sends to
+
+  # ---------- Database viewer in the browser ----------
+  adminer:
+    image: adminer
+    container_name: swiftdrop-adminer
+    restart: unless-stopped
+    ports:
+      - "8081:8080"            # http://localhost:8081
+    depends_on:
+      - postgres
+
+  # ---------- Backend: use the local database and Mailpit ----------
+  backend:
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      MAIL_HOST: mailpit
+      MAIL_PORT: 1025
+      # Mailpit needs no login, so the Gmail credentials from .env are not sent
+      MAIL_USERNAME: ""
+      MAIL_PASSWORD: ""
+      MAIL_SMTP_AUTH: "false"
+      MAIL_STARTTLS: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
